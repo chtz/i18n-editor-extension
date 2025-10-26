@@ -89,7 +89,7 @@ function updateI18n(config) {
             
             // Write updated JSON if there were changes
             if (changes > 0) {
-                const pretty = JSON.stringify(jsonData, null, 2);
+                const pretty = JSON.stringify(jsonData, null, 4);
                 fs.writeFileSync(filePath, pretty, 'utf-8');
                 updatedFiles.push(filePath);
                 console.log(`Backup written: ${backupPath}`);
