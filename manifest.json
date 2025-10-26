@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "i18n Text Editor",
+  "version": "1.0.0",
+  "description": "Click-to-edit translations with automatic JSON file updates",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "nativeMessaging",
+    "background"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "src/background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/content-script.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "i18n Editor"
+  },
+  "options_page": "src/popup/popup.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["src/common/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

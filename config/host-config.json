@@ -1,0 +1,9 @@
+{
+  "name": "com.i18ntexteditor.host",
+  "description": "i18n Text Editor Native Host",
+  "path": "/path/to/i18n-editor-extension/native/host/native-messaging-host.js",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://YOUR_EXTENSION_ID/"
+  ]
+}

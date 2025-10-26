@@ -1,0 +1,32 @@
+{
+  "name": "i18n-editor-extension",
+  "version": "1.0.0",
+  "description": "Chrome extension for editing i18n translations with automatic file updates",
+  "main": "native/host/native-messaging-host.js",
+  "scripts": {
+    "install-native": "./build/install-native.bash",
+    "test": "node native/update-i18n.js",
+    "postinstall": "chmod +x native/host/native-messaging-host.js"
+  },
+  "keywords": [
+    "i18n",
+    "internationalization",
+    "translation",
+    "chrome-extension",
+    "i18next",
+    "react-i18next"
+  ],
+  "author": "i18n Editor Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/i18n-editor-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/i18n-editor-extension/issues"
+  },
+  "homepage": "https://github.com/your-username/i18n-editor-extension#readme"
+}
