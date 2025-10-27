@@ -129,6 +129,13 @@
     // Create an inline editor for the clicked element
     function makeInlineEditor(targetEl, ns, key, oldText, allExact) {
         const widthPx = Math.max(80, targetEl.clientWidth || 0);
+        const hasMultiple = allExact && allExact.length > 1;
+
+        const container = document.createElement("div");
+        container.style.display = "inline-flex";
+        container.style.flexDirection = "column";
+        container.style.gap = "4px";
+        container.style.alignItems = "flex-start";
 
         const input = document.createElement("input");
         input.type = "text";
@@ -143,15 +150,41 @@
         input.style.font = getComputedStyle(targetEl).font;
         input.style.padding = "2px 6px";
         input.style.margin = "0";
-        input.style.border = "1px solid #ccc";
+        input.style.border = hasMultiple ? "2px solid #ff9800" : "1px solid #ccc";
         input.style.borderRadius = "4px";
         input.style.background = "white";
         input.style.color = getComputedStyle(targetEl).color;
 
+        // Add key indicator below input if multiple matches
+        let keyIndicator = null;
+        if (hasMultiple) {
+            keyIndicator = document.createElement("div");
+            keyIndicator.style.cssText = `
+                font-size: 11px;
+                color: #ff9800;
+                font-family: monospace;
+                background: #fff3e0;
+                padding: 2px 6px;
+                border-radius: 3px;
+                white-space: nowrap;
+                max-width: ${widthPx}px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            `;
+            keyIndicator.textContent = `🔑 ${ns}:${key} (${allExact.length} matches)`;
+            keyIndicator.title = `Multiple keys found:\n${allExact.map(c => `${c.ns}:${c.key}`).join('\n')}`;
+        }
+
         const oldHTML = targetEl.innerHTML;
         targetEl.dataset.i18nOldHTML = oldHTML;
         targetEl.innerHTML = "";
-        targetEl.appendChild(input);
+        
+        container.appendChild(input);
+        if (keyIndicator) {
+            container.appendChild(keyIndicator);
+        }
+        
+        targetEl.appendChild(container);
         input.focus();
         input.select();
 
@@ -266,6 +299,56 @@
         e.stopPropagation();
         e.stopImmediatePropagation();
 
+        // PRIORITY 1: Check for data-i18n-key attribute (from Babel plugin)
+        if (target.dataset && target.dataset.i18nKey) {
+            const key = target.dataset.i18nKey;
+            const text = target.textContent || target.innerText || "";
+            const template = target.dataset.i18nTpl || text; // Use template if available
+            
+            console.clear();
+            console.group("[i18n-debug] lookup + edit (from data attributes)");
+            console.log("Element:", target);
+            console.log("Key:", key);
+            console.log("Text:", JSON.stringify(text));
+            console.log("Template:", JSON.stringify(template));
+            
+            // Find the correct namespace by searching all bundles
+            const lang = i18n.resolvedLanguage || i18n.language || "en";
+            const namespaces =
+                Array.isArray(i18n.options?.ns) && i18n.options.ns.length ? i18n.options.ns : ["translation"];
+            
+            await ensureBundles(i18n, lang, namespaces);
+            
+            let foundNs = null;
+            for (const ns of namespaces) {
+                const bundle = getBundle(i18n, lang, ns);
+                const flat = flatten(bundle);
+                if (flat[key] !== undefined) {
+                    foundNs = ns;
+                    console.log("✅ Found key in namespace:", ns);
+                    break;
+                }
+            }
+            
+            if (!foundNs) {
+                // Fallback to data-i18n-ns or default
+                foundNs = target.dataset.i18nNs || namespaces[0] || "translation";
+                console.warn("⚠️  Key not found in any namespace, using:", foundNs);
+            }
+            
+            // Highlight briefly
+            if (target && target.style) {
+                target.style.outline = "2px solid green";
+                setTimeout(() => (target.style.outline = ""), 500);
+            }
+            
+            console.groupEnd();
+            
+            // Open inline editor with the template (original untranslated text)
+            makeInlineEditor(target, foundNs, key, template, [{ ns: foundNs, key }]);
+            return;
+        }
+
         const text =
             raw.nodeType === Node.TEXT_NODE ? raw.nodeValue || "" : target.innerText || target.textContent || "";
         const tN = NORM(text);
@@ -317,12 +400,12 @@
 
         // highlight briefly
         if (target && target.style) {
-            target.style.outline = "2px solid red";
+            target.style.outline = "2px solid orange";
             setTimeout(() => (target.style.outline = ""), 500);
         }
 
         console.clear();
-        console.group("[i18n-debug] lookup + edit");
+        console.group("[i18n-debug] lookup + edit (fallback: no data attributes)");
         console.log("Element:", target);
         console.log("CSS path:", cssPath(target));
         console.log("Language:", lang);
@@ -330,14 +413,52 @@
         console.log("Text:", JSON.stringify(text));
 
         if (bestExact.length) {
+            // Smart filtering: prefer shorter, more specific keys
+            const filtered = bestExact.filter(c => {
+                const key = c.key.toLowerCase();
+                // Prefer keys that don't end with .title, .description, etc. (likely duplicates)
+                // Unless ALL keys end that way
+                return true;
+            });
+            
+            // Sort by key specificity (shorter keys are often more specific than long nested ones)
+            const sorted = filtered.sort((a, b) => {
+                // Prefer keys with fewer dots (less nested)
+                const dotsA = (a.key.match(/\./g) || []).length;
+                const dotsB = (b.key.match(/\./g) || []).length;
+                if (dotsA !== dotsB) return dotsA - dotsB;
+                
+                // Then prefer shorter keys
+                return a.key.length - b.key.length;
+            });
+            
             console.log(
-                "✅ Exact:",
+                "✅ Exact matches found:",
                 bestExact.map((c) => `${c.ns}:${c.key}`),
             );
+            
+            if (bestExact.length > 1) {
+                console.warn(
+                    `⚠️  Multiple keys (${bestExact.length}) have the same value! Using best guess: ${sorted[0].ns}:${sorted[0].key}`
+                );
+                console.warn(
+                    "💡 Tip: Add Babel plugin to your React app for accurate key detection"
+                );
+                showNotification(
+                    `⚠️ Multiple keys found (${bestExact.length}). Using: ${sorted[0].key}`,
+                    'info'
+                );
+            }
 
-            // Open inline editor and pass the full exact list for commit-time uniform {new}
-            const top = bestExact[0];
-            makeInlineEditor(target, top.ns, top.key, text, bestExact);
+            // Use the smartest guess
+            const top = sorted[0];
+            
+            // Get template from i18next store
+            const bundle = getBundle(i18n, lang, top.ns);
+            const flat = flatten(bundle);
+            const template = flat[top.key] || text;
+            
+            makeInlineEditor(target, top.ns, top.key, template, bestExact);
         } else {
             console.log("❌ No exact match.");
             if (bestLoose.length) {

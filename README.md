@@ -8,8 +8,10 @@ Click-to-edit Chrome extension for i18next translations with automatic JSON file
 
 - Click any translated text to edit inline
 - Automatic updates to JSON resource files (with timestamped backups)
-- Multi-namespace support
+- Multi-namespace support with automatic detection
 - Visual notifications for success/errors
+- Babel plugin integration for accurate key detection via DOM attributes
+- Template preservation (edits original template with placeholders, not rendered text)
 
 ## Prerequisites
 
@@ -18,6 +20,8 @@ Click-to-edit Chrome extension for i18next translations with automatic JSON file
 - Web app with `window.i18next` exposed
 
 ## Installation
+
+### Part 1: Install Extension
 
 ```bash
 # 1. Install native messaging host
@@ -49,6 +53,68 @@ sed -i 's/YOUR_EXTENSION_ID/your-actual-id/' \
 # - Click extension icon → "Enable Editor"
 # - Or in console: starti18ndebug()
 ```
+
+### Part 2: Add Babel Plugin to Your React App (Recommended)
+
+This plugin adds `data-i18n-key` attributes to all `t()` calls for accurate key detection.
+
+**1. Copy the Babel plugin:**
+```bash
+# Copy babel-plugin-i18n-debug.cjs to your React project root
+cp babel-plugin-i18n-debug.cjs /path/to/your/react/project/
+```
+
+**2. Update your build config:**
+
+For **Vite** (`vite.config.ts`):
+```typescript
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+
+export default defineConfig({
+  plugins: [
+    react({
+      babel: {
+        plugins: process.env.NODE_ENV === 'development'
+          ? [
+              ['./babel-plugin-i18n-debug.cjs', {
+                localesPath: path.resolve(__dirname, 'src/assets/locales'),
+                defaultLang: 'de'
+              }]
+            ]
+          : []
+      }
+    })
+  ]
+});
+```
+
+For **webpack/CRA** (`.babelrc` or `babel.config.js`):
+```javascript
+module.exports = {
+  plugins: [
+    process.env.NODE_ENV === 'development' && [
+      './babel-plugin-i18n-debug.cjs',
+      {
+        localesPath: require('path').resolve(__dirname, 'src/assets/locales'),
+        defaultLang: 'de'
+      }
+    ]
+  ].filter(Boolean)
+};
+```
+
+**3. Restart your dev server**
+
+Now all `{t("key")}` calls will render as:
+```html
+<span data-i18n-key="key" data-i18n-ns="namespace" data-i18n-tpl="Original {{template}}">
+  Rendered text
+</span>
+```
+
+The extension will use these attributes for instant, accurate key detection!
 
 ## Usage
 
