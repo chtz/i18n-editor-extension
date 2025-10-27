@@ -4,6 +4,8 @@
 
 Click-to-edit Chrome extension for i18next translations with automatic JSON file updates via native messaging.
 
+**🚀 New here? Start with [QUICK_START.md](QUICK_START.md) for a 7-minute setup guide!**
+
 ## Features
 
 - Click any translated text to edit inline
@@ -67,6 +69,26 @@ cp babel-plugin-i18n-debug.cjs /path/to/your/react/project/
 **2. Update your build config:**
 
 For **Vite** (`vite.config.ts`):
+
+**Simple version** (uses defaults):
+```typescript
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [
+    react({
+      babel: {
+        plugins: process.env.NODE_ENV === "development" 
+          ? ["./babel-plugin-i18n-debug.cjs"] 
+          : []
+      }
+    })
+  ]
+});
+```
+
+**With options** (customize paths):
 ```typescript
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -89,6 +111,10 @@ export default defineConfig({
   ]
 });
 ```
+
+**Default values** (if no options provided):
+- `localesPath`: `'src/assets/locales'` (relative to project root)
+- `defaultLang`: `'de'`
 
 For **webpack/CRA** (`.babelrc` or `babel.config.js`):
 ```javascript
@@ -115,6 +141,8 @@ Now all `{t("key")}` calls will render as:
 ```
 
 The extension will use these attributes for instant, accurate key detection!
+
+**📚 See [BABEL_PLUGIN_PATTERNS.md](BABEL_PLUGIN_PATTERNS.md) for all supported patterns and edge cases.**
 
 ## Usage
 

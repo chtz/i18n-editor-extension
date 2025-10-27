@@ -55,6 +55,25 @@ cp babel-plugin-i18n-debug.cjs /path/to/your/react/project/
 
 Edit `vite.config.ts`:
 
+**Simple version** (recommended - uses defaults):
+```typescript
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [
+    react({
+      babel: {
+        plugins: process.env.NODE_ENV === "development"
+          ? ["./babel-plugin-i18n-debug.cjs"]
+          : []
+      }
+    })
+  ]
+});
+```
+
+**With custom options**:
 ```typescript
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -127,14 +146,26 @@ module.exports = {
 };
 ```
 
-### 3. Configure Plugin Options
+### 3. Configure Plugin Options (Optional)
 
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `localesPath` | string | Yes | Absolute path to your locales directory |
-| `defaultLang` | string | Yes | Default language code (e.g., `'de'`, `'en'`) |
+The plugin works out of the box with sensible defaults. You only need to customize if your project structure differs.
 
-**Important**: The `localesPath` must be an **absolute path**. Use `path.resolve()` or `__dirname` to ensure it's correct.
+**Default values:**
+- `localesPath`: `'src/assets/locales'` (relative to project root)
+- `defaultLang`: `'de'`
+
+**Customize when:**
+- ❌ Your locales are NOT in `src/assets/locales`
+- ❌ Your default language is NOT `de`
+
+**Available options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `localesPath` | string | `'src/assets/locales'` | Path to your locales directory (absolute or relative) |
+| `defaultLang` | string | `'de'` | Default language code (e.g., `'de'`, `'en'`, `'fr'`) |
+
+**Note**: If you provide `localesPath`, use an **absolute path** with `path.resolve(__dirname, 'path/to/locales')`.
 
 ### 4. Verify File Structure
 
