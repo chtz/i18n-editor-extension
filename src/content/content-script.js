@@ -16,26 +16,6 @@
     if (window.starti18ndebug && window.stopi18ndebug) return;
 
     // ---------- helpers ----------
-    function flatten(obj, prefix = "", out = {}) {
-        if (!obj || typeof obj !== "object") return out;
-        for (const [k, v] of Object.entries(obj)) {
-            const key = prefix ? `${prefix}.${k}` : k;
-            if (v && typeof v === "object") flatten(v, key, out);
-            else out[key] = v;
-        }
-        return out;
-    }
-
-    function getBundle(i18n, lang, ns) {
-        let bundle = i18n.store?.data?.[lang]?.[ns];
-        if (!bundle && typeof i18n.getResourceBundle === "function") {
-            try {
-                bundle = i18n.getResourceBundle(lang, ns);
-            } catch {}
-        }
-        return bundle || {};
-    }
-
     function isEditableInput(el) {
         return el && el.nodeType === 1 && el.tagName === "INPUT" && el.dataset.i18nEditor === "1";
     }
@@ -154,9 +134,6 @@
         async function commit() {
             const newText = input.value;
             
-            const i18n = window.i18next || window.i18n;
-            const currentLang = i18n?.resolvedLanguage || i18n?.language || null;
-            
             const payload = [{
                 key: key,
                 ns: ns,
@@ -168,8 +145,7 @@
                 const response = await new Promise((resolve) => {
                     window.postMessage({
                         type: 'i18n-editor-update',
-                        payload: payload,
-                        language: currentLang
+                        payload: payload
                     }, '*');
                     
                     const listener = (event) => {
@@ -268,10 +244,6 @@
         async function commit() {
             const newText = input.value;
 
-            // Get current language from i18next
-            const i18n = window.i18next || window.i18n;
-            const currentLang = i18n?.resolvedLanguage || i18n?.language || null;
-
             // Single key update
             const payload = [{
                 key: key,
@@ -285,8 +257,7 @@
                 const response = await new Promise((resolve) => {
                     window.postMessage({
                         type: 'i18n-editor-update',
-                        payload: payload,
-                        language: currentLang
+                        payload: payload
                     }, '*');
                     
                     const listener = (event) => {
@@ -350,12 +321,6 @@
     async function handler(e) {
         if (isEditableInput(e.target)) return;
 
-        const i18n = window.i18next || window.i18n;
-        if (!i18n) {
-            console.warn("[i18n-debug] window.i18next not found");
-            return;
-        }
-
         const raw = e.target;
         const target = raw.nodeType === Node.TEXT_NODE ? raw.parentNode : raw;
 
@@ -376,21 +341,33 @@
         e.stopImmediatePropagation();
 
         // Pattern 1: Text content (data-i18n-text-keys, data-i18n-text-ns)
-        const textKey = target.dataset?.i18nTextKeys;
-        const textNs = target.dataset?.i18nTextNs;
+        const textKeysRaw = target.dataset?.i18nTextKeys;
+        const textNsRaw = target.dataset?.i18nTextNs;
         
-        if (textKey && textNs) {
-            const text = target.textContent || target.innerText || "";
+        if (textKeysRaw && textNsRaw) {
+            // Handle comma-separated values (i18n-dom-tagger can generate multiple keys)
+            const keys = textKeysRaw.split(',').map(k => k.trim()).filter(Boolean);
+            const namespaces = textNsRaw.split(',').map(n => n.trim()).filter(Boolean);
             
-            // Get template from bundle
-            const lang = i18n.resolvedLanguage || i18n.language || "en";
-            const bundle = getBundle(i18n, lang, textNs);
-            const flat = flatten(bundle);
-            const template = flat[textKey] || text;
+            // Use the first key/namespace pair (most common case)
+            const textKey = keys[0];
+            const textNs = namespaces[0];
+            
+            if (!textKey || !textNs) {
+                console.warn("[i18n-debug] Invalid i18n attributes (empty after parsing)");
+                showNotification("Element not editable: invalid i18n attributes", 'error');
+                return;
+            }
+            
+            // Use the current text content as the template
+            const text = target.textContent || target.innerText || "";
             
             console.clear();
             console.log(`[i18n-debug] Editing ${textNs}:${textKey}`);
-            console.log("Current value:", JSON.stringify(template));
+            if (keys.length > 1) {
+                console.log(`[i18n-debug] Note: Element has ${keys.length} keys, editing the first one`);
+            }
+            console.log("Current value:", JSON.stringify(text));
             
             // Highlight briefly
             if (target && target.style) {
@@ -399,14 +376,26 @@
             }
             
             // Open inline editor (not an attribute)
-            makeInlineEditor(target, textNs, textKey, template, false);
+            makeInlineEditor(target, textNs, textKey, text, false);
             return;
         }
         
         // Pattern 2: Attribute content (data-i18n-attr, data-i18n-{attr}-ns, data-i18n-{attr}-key)
-        const attrName = target.dataset?.i18nAttr;
+        const attrListRaw = target.dataset?.i18nAttr;
         
-        if (attrName) {
+        if (attrListRaw) {
+            // Handle comma-separated attribute names (i18n-dom-tagger can tag multiple attributes)
+            const attrNames = attrListRaw.split(',').map(a => a.trim()).filter(Boolean);
+            
+            // Use the first attribute (most common case)
+            const attrName = attrNames[0];
+            
+            if (!attrName) {
+                console.warn("[i18n-debug] Invalid data-i18n-attr (empty after parsing)");
+                showNotification("Element not editable: invalid i18n-attr", 'error');
+                return;
+            }
+            
             const attrNsKey = `i18n${attrName.charAt(0).toUpperCase() + attrName.slice(1)}Ns`;
             const attrKeyKey = `i18n${attrName.charAt(0).toUpperCase() + attrName.slice(1)}Key`;
             
@@ -419,17 +408,15 @@
                 return;
             }
             
+            // Use the current attribute value
             const currentValue = target.getAttribute(attrName) || "";
-            
-            // Get template from bundle
-            const lang = i18n.resolvedLanguage || i18n.language || "en";
-            const bundle = getBundle(i18n, lang, ns);
-            const flat = flatten(bundle);
-            const template = flat[key] || currentValue;
             
             console.clear();
             console.log(`[i18n-debug] Editing ${ns}:${key} (attribute: ${attrName})`);
-            console.log("Current value:", JSON.stringify(template));
+            if (attrNames.length > 1) {
+                console.log(`[i18n-debug] Note: Element has ${attrNames.length} translated attributes, editing the first one`);
+            }
+            console.log("Current value:", JSON.stringify(currentValue));
             
             // Highlight briefly
             if (target && target.style) {
@@ -438,7 +425,7 @@
             }
             
             // Open floating editor for attribute
-            makeInlineEditor(target, ns, key, template, true);
+            makeInlineEditor(target, ns, key, currentValue, true);
             return;
         }
         

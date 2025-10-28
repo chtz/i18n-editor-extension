@@ -27,8 +27,8 @@ async function handleTranslationUpdate(request, sendResponse) {
       chrome.storage.sync.get(['root', 'lang', 'force'], resolve)
     );
 
-    // Use language from i18next if available, otherwise use configured default
-    const targetLang = request.language || config.lang || 'de';
+    // Always use the configured language from extension settings
+    const targetLang = config.lang || 'de';
 
     const message = {
       root: config.root || 'src/assets/locales',

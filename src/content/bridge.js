@@ -6,11 +6,10 @@ window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     
     if (event.data.type === 'i18n-editor-update') {
-        // Forward to background script with language
+        // Forward to background script (language comes from extension config)
         chrome.runtime.sendMessage({
             type: 'UPDATE_TRANSLATION',
-            payload: event.data.payload,
-            language: event.data.language  // Forward current language
+            payload: event.data.payload
         }, (response) => {
             // Send response back to page context
             window.postMessage({
