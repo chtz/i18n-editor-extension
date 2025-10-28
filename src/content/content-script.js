@@ -16,10 +16,6 @@
     if (window.starti18ndebug && window.stopi18ndebug) return;
 
     // ---------- helpers ----------
-    function isEditableInput(el) {
-        return el && el.nodeType === 1 && el.tagName === "INPUT" && el.dataset.i18nEditor === "1";
-    }
-
     // Show notification in page
     function showNotification(message, type = 'info') {
         const notification = document.createElement('div');
@@ -59,6 +55,7 @@
     function makeFloatingEditor(targetEl, ns, key, oldText) {
         // Create overlay
         const overlay = document.createElement('div');
+        overlay.setAttribute('data-i18n-modal', 'true'); // Mark as modal for event filtering
         overlay.style.cssText = `
             position: fixed;
             top: 0;
@@ -202,142 +199,20 @@
         });
     }
 
-    // Create an inline editor for the clicked element
-    function makeInlineEditor(targetEl, ns, key, oldText, isAttribute = false) {
-        const isFormElement = targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA' || targetEl.tagName === 'SELECT';
-        const isButton = targetEl.tagName === 'BUTTON';
-        const isInteractiveElement = isFormElement || isButton || targetEl.tagName === 'A' || targetEl.hasAttribute('onclick');
-        
-        // For form elements, buttons, links, or attributes, create a floating overlay editor
-        // to avoid interfering with the element's normal behavior
-        if (isInteractiveElement || isAttribute) {
-            return makeFloatingEditor(targetEl, ns, key, oldText);
-        }
-        
-        // For simple text content only (divs, spans, paragraphs), replace inline
-        const widthPx = Math.max(80, targetEl.clientWidth || 0);
-
-        const input = document.createElement("input");
-        input.type = "text";
-        input.value = oldText;
-        input.dataset.i18nEditor = "1";
-        input.dataset.i18nKey = key;
-        input.dataset.i18nNs = ns;
-        input.dataset.i18nOld = oldText;
-
-        input.style.width = widthPx ? widthPx + "px" : "auto";
-        input.style.boxSizing = "border-box";
-        input.style.font = getComputedStyle(targetEl).font;
-        input.style.padding = "2px 6px";
-        input.style.margin = "0";
-        input.style.border = "2px solid #4CAF50";
-        input.style.borderRadius = "4px";
-        input.style.background = "white";
-        input.style.color = getComputedStyle(targetEl).color;
-
-        const oldHTML = targetEl.innerHTML;
-        targetEl.dataset.i18nOldHTML = oldHTML;
-        targetEl.innerHTML = "";
-        targetEl.appendChild(input);
-        input.focus();
-        input.select();
-
-        async function commit() {
-            const newText = input.value;
-
-            // Single key update
-            const payload = [{
-                key: key,
-                ns: ns,
-                old: oldText,
-                new: newText,
-            }];
-
-            // Send to background script via bridge
-            try {
-                const response = await new Promise((resolve) => {
-                    window.postMessage({
-                        type: 'i18n-editor-update',
-                        payload: payload
-                    }, '*');
-                    
-                    const listener = (event) => {
-                        if (event.data.type === 'i18n-editor-update-response') {
-                            window.removeEventListener('message', listener);
-                            resolve(event.data.response);
-                        }
-                    };
-                    window.addEventListener('message', listener);
-                    
-                    setTimeout(() => {
-                        window.removeEventListener('message', listener);
-                        resolve({ success: false, error: 'Timeout waiting for response' });
-                    }, 10000);
-                });
-
-                if (response && response.success) {
-                    console.log(`[i18n-debug] ✅ Updated ${ns}:${key}`);
-                    showNotification(`Updated: ${key}`, 'success');
-                    targetEl.innerHTML = "";
-                    targetEl.textContent = newText;
-                } else {
-                    console.error("[i18n-debug] ❌ Update failed:", response?.error);
-                    showNotification(`Update failed: ${response?.error || 'Unknown error'}`, 'error');
-                }
-            } catch (error) {
-                console.error("[i18n-debug] ❌ Error:", error);
-                showNotification(`Error: ${error.message}`, 'error');
-            }
-        }
-
-        function cancel() {
-            targetEl.innerHTML = targetEl.dataset.i18nOldHTML || oldText;
-            delete targetEl.dataset.i18nOldHTML;
-        }
-
-        input.addEventListener("keydown", (ev) => {
-            if (ev.key === "Enter" || ev.key === "Tab") {
-                ev.preventDefault();
-                commit();
-            } else if (ev.key === "Escape") {
-                ev.preventDefault();
-                cancel();
-            }
-        });
-
-        // Optional: blur commits UI text (no file write)
-        input.addEventListener("blur", () => {
-            if (isEditableInput(input)) {
-                input.dataset.i18nEditor = "0";
-                const newText = input.value;
-                targetEl.innerHTML = "";
-                targetEl.textContent = newText;
-            }
-        });
+    // Always use floating modal editor - simple and avoids all DOM/event conflicts
+    function makeEditor(targetEl, ns, key, oldText) {
+        return makeFloatingEditor(targetEl, ns, key, oldText);
     }
 
     // ---------- main click handler ----------
     async function handler(e) {
-        if (isEditableInput(e.target)) return;
-
-        const raw = e.target;
-        const target = raw.nodeType === Node.TEXT_NODE ? raw.parentNode : raw;
-
-        // For input/textarea/select elements, check if they have i18n attributes
-        // If not, let them behave normally
-        const isFormElement = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
-        
-        if (isFormElement) {
-            // Only prevent default if element has i18n attributes
-            const hasI18nAttrs = target.dataset?.i18nTextKeys || target.dataset?.i18nAttr;
-            if (!hasI18nAttrs) {
-                return; // Let form element behave normally
-            }
-        }
-
+        // Always block the click from doing anything
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
+
+        const raw = e.target;
+        const target = raw.nodeType === Node.TEXT_NODE ? raw.parentNode : raw;
 
         // Pattern 1: Text content (data-i18n-text-keys, data-i18n-text-ns)
         const textKeysRaw = target.dataset?.i18nTextKeys;
@@ -374,8 +249,8 @@
                 setTimeout(() => (target.style.outline = ""), 500);
             }
             
-            // Open inline editor (not an attribute)
-            makeInlineEditor(target, textNs, textKey, text, false);
+            // Open modal editor
+            makeEditor(target, textNs, textKey, text);
             return;
         }
         
@@ -423,8 +298,8 @@
                 setTimeout(() => (target.style.outline = ""), 500);
             }
             
-            // Open floating editor for attribute
-            makeInlineEditor(target, ns, key, currentValue, true);
+            // Open modal editor
+            makeEditor(target, ns, key, currentValue);
             return;
         }
         
@@ -435,6 +310,22 @@
 
     // ---------- public controls ----------
     const capture = true;
+    
+    // Block all user interactions with the page (except modal)
+    function blockInteraction(e) {
+        const target = e.target;
+        
+        // Allow interaction with modal overlay elements only
+        if (target.closest && target.closest('[data-i18n-modal]')) {
+            return;
+        }
+        
+        // Block everything else
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+    }
+    
     window.starti18ndebug = function starti18ndebug() {
         if (window.__i18nDebugActive) {
             console.info("[i18n-debug] already running.");
@@ -442,7 +333,27 @@
         }
         window.__i18nDebugActive = true;
         window.__i18nNSInspector = handler;
+        
+        // Capture click to intercept before any app handlers
         document.addEventListener("click", handler, capture);
+        
+        // Block all other interactions (click is handled separately by handler)
+        const blockEvents = ['mousedown', 'mouseup', 'dblclick', 'contextmenu', 
+                             'keydown', 'keypress', 'keyup', 
+                             'touchstart', 'touchend', 'touchmove',
+                             'submit', 'change', 'input', 'focus', 'blur',
+                             'pointerdown', 'pointerup', 'pointermove'];
+        
+        blockEvents.forEach(eventType => {
+            document.addEventListener(eventType, blockInteraction, capture);
+        });
+        
+        // Store event types for cleanup
+        window.__i18nBlockedEvents = blockEvents;
+        
+        // Add visual indicator that page is in edit mode
+        document.body.style.cursor = 'crosshair';
+        
         console.info(
             "[i18n-debug] enabled. Click translated text to reveal keys and edit. " +
                 "Enter/Tab updates files automatically.",
@@ -461,7 +372,21 @@
             console.info("[i18n-debug] not running.");
             return;
         }
+        
+        // Remove click handler
         document.removeEventListener("click", window.__i18nNSInspector, capture);
+        
+        // Remove all blocked event listeners
+        if (window.__i18nBlockedEvents) {
+            window.__i18nBlockedEvents.forEach(eventType => {
+                document.removeEventListener(eventType, blockInteraction, capture);
+            });
+            delete window.__i18nBlockedEvents;
+        }
+        
+        // Restore cursor
+        document.body.style.cursor = '';
+        
         window.__i18nNSInspector = undefined;
         window.__i18nDebugActive = false;
         console.info("[i18n-debug] disabled.");
