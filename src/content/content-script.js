@@ -187,11 +187,9 @@
         input.addEventListener('keydown', (ev) => {
             if (ev.key === 'Enter') {
                 ev.preventDefault();
-                ev.stopPropagation();
                 commit();
             } else if (ev.key === 'Escape') {
                 ev.preventDefault();
-                ev.stopPropagation();
                 cancel();
             }
         });
@@ -207,13 +205,16 @@
     // Create an inline editor for the clicked element
     function makeInlineEditor(targetEl, ns, key, oldText, isAttribute = false) {
         const isFormElement = targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA' || targetEl.tagName === 'SELECT';
+        const isButton = targetEl.tagName === 'BUTTON';
+        const isInteractiveElement = isFormElement || isButton || targetEl.tagName === 'A' || targetEl.hasAttribute('onclick');
         
-        // For form elements or attributes, create a floating overlay editor
-        if (isFormElement || isAttribute) {
+        // For form elements, buttons, links, or attributes, create a floating overlay editor
+        // to avoid interfering with the element's normal behavior
+        if (isInteractiveElement || isAttribute) {
             return makeFloatingEditor(targetEl, ns, key, oldText);
         }
         
-        // For text content, replace inline
+        // For simple text content only (divs, spans, paragraphs), replace inline
         const widthPx = Math.max(80, targetEl.clientWidth || 0);
 
         const input = document.createElement("input");
@@ -297,11 +298,9 @@
         input.addEventListener("keydown", (ev) => {
             if (ev.key === "Enter" || ev.key === "Tab") {
                 ev.preventDefault();
-                ev.stopPropagation();
                 commit();
             } else if (ev.key === "Escape") {
                 ev.preventDefault();
-                ev.stopPropagation();
                 cancel();
             }
         });
