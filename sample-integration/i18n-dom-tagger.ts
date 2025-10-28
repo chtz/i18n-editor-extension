@@ -1,6 +1,3 @@
-// i18n-dom-tagger-safe.ts
-// Solid approach: no node insert/remove. Only mutate text/attributes in place.
-
 const MARK_RE = /\[\[i18n\|([^|\]]+)\|([^\]]+)\]\]([\s\S]*?)\[\[\/i18n\]\]/g;
 
 function attachMeta(el: Element, ns: string, key: string, where: "text" | { attr: string }) {
@@ -141,7 +138,7 @@ export function installI18nDomTagger(root: ParentNode = document.body) {
     if (process.env.NODE_ENV !== "development") return;
 
     let scheduled = false;
-    const schedule = (scope: ParentNode) => {
+    const schedule = () => {
         if (scheduled) return;
         scheduled = true;
         setTimeout(() => {
@@ -154,11 +151,11 @@ export function installI18nDomTagger(root: ParentNode = document.body) {
     };
 
     // Initial pass (after current work)
-    schedule(root);
+    schedule();
 
     const mo = new MutationObserver((_muts) => {
         // Do not mutate synchronously inside observer; just schedule one pass.
-        schedule(root);
+        schedule();
     });
 
     mo.observe(root, {
