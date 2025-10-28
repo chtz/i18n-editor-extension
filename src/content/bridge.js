@@ -36,6 +36,19 @@ window.addEventListener('message', (event) => {
             }, '*');
         });
     }
+    
+    if (event.data.type === 'i18n-editor-get-template') {
+        // Request template from background script
+        chrome.runtime.sendMessage({
+            type: 'GET_TEMPLATE',
+            key: event.data.key
+        }, (response) => {
+            window.postMessage({
+                type: 'i18n-editor-template-response',
+                template: response?.template || null
+            }, '*');
+        });
+    }
 });
 
 // Get a unique key for the current tab based on hostname

@@ -77,7 +77,38 @@ process.stdin.on('readable', () => {
 function handleMessage(message) {
     console.error('Native host received message:', JSON.stringify(message, null, 2));
     try {
-        // Validate structure
+        // Check if this is a template lookup request
+        if (message.action === 'get_template') {
+            if (!message.root || !message.lang || !message.key) {
+                throw new Error('Missing required fields for template lookup: root, lang, key');
+            }
+            
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Search reviewed.json first, then old.json
+            const namespaces = ['reviewed', 'old'];
+            for (const ns of namespaces) {
+                const filePath = path.join(message.root, message.lang, `${ns}.json`);
+                if (fs.existsSync(filePath)) {
+                    try {
+                        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+                        const value = getNestedValue(data, message.key);
+                        if (value !== null) {
+                            console.error(`[DEBUG] Template found in ${ns}.json: ${message.key}`);
+                            return sendMessage({ template: value });
+                        }
+                    } catch (e) {
+                        console.error(`[DEBUG] Error reading ${filePath}:`, e.message);
+                    }
+                }
+            }
+            
+            console.error(`[DEBUG] Template not found for key: ${message.key}`);
+            return sendMessage({ template: null });
+        }
+        
+        // Regular update request
         if (!message.root || !message.lang || !message.payload) {
             throw new Error('Missing required fields: root, lang, payload');
         }
@@ -90,8 +121,6 @@ function handleMessage(message) {
         sendMessage({
             success: !!result.success,
             message: result.message || 'OK',
-            // If you need details, add small, essential fields only:
-            // changedFiles: result.changedFiles,
         });
     } catch (err) {
         console.error('Native host error:', err.stack || err.message);
@@ -101,6 +130,20 @@ function handleMessage(message) {
             message: `Error: ${err.message}`,
         });
     }
+}
+
+// Helper to get nested value from object
+function getNestedValue(obj, path) {
+    const segments = path.split('.');
+    let current = obj;
+    for (const segment of segments) {
+        if (current && typeof current === 'object' && segment in current) {
+            current = current[segment];
+        } else {
+            return null;
+        }
+    }
+    return current;
 }
 
 // ---- Output: send framed JSON and exit only after flush ----

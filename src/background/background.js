@@ -19,6 +19,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
+  
+  if (request.type === 'GET_TEMPLATE') {
+    handleGetTemplate(request, sendResponse);
+    return true;
+  }
 });
 
 async function handleTranslationUpdate(request, sendResponse) {
@@ -55,6 +60,34 @@ async function handleTranslationUpdate(request, sendResponse) {
   } catch (err) {
     console.error('Error handling translation update:', err);
     sendResponse({ success: false, error: `Communication error: ${err.message}` });
+  }
+}
+
+async function handleGetTemplate(request, sendResponse) {
+  try {
+    const config = await new Promise((resolve) =>
+      chrome.storage.sync.get(['root', 'lang'], resolve)
+    );
+
+    const message = {
+      root: config.root || 'src/assets/locales',
+      lang: config.lang || 'de',
+      key: request.key,
+      action: 'get_template',
+    };
+
+    chrome.runtime.sendNativeMessage('com.i18ntexteditor.host', message, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Native messaging error:', chrome.runtime.lastError.message);
+        sendResponse({ template: null });
+        return;
+      }
+
+      sendResponse({ template: response?.template || null });
+    });
+  } catch (err) {
+    console.error('Error getting template:', err);
+    sendResponse({ template: null });
   }
 }
 

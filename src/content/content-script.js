@@ -16,6 +16,36 @@
     if (window.starti18ndebug && window.stopi18ndebug) return;
 
     // ---------- helpers ----------
+    // Load template from JSON files via background script
+    async function loadTemplate(key) {
+        try {
+            const response = await new Promise((resolve) => {
+                window.postMessage({
+                    type: 'i18n-editor-get-template',
+                    key: key
+                }, '*');
+                
+                const listener = (event) => {
+                    if (event.data.type === 'i18n-editor-template-response') {
+                        window.removeEventListener('message', listener);
+                        resolve(event.data);
+                    }
+                };
+                window.addEventListener('message', listener);
+                
+                setTimeout(() => {
+                    window.removeEventListener('message', listener);
+                    resolve({ template: null, error: 'Timeout' });
+                }, 3000);
+            });
+            
+            return response.template;
+        } catch (error) {
+            console.error('[i18n-debug] Error loading template:', error);
+            return null;
+        }
+    }
+    
     // Show notification in page
     function showNotification(message, type = 'info') {
         const notification = document.createElement('div');
@@ -52,7 +82,10 @@
     }
 
     // Create a floating overlay editor (for form elements and attributes)
-    function makeFloatingEditor(targetEl, ns, key, oldText) {
+    async function makeFloatingEditor(targetEl, ns, key, renderedText) {
+        // Load the template from JSON
+        const template = await loadTemplate(key);
+        const editableText = template || renderedText; // Fallback to rendered if template not found
         // Create overlay
         const overlay = document.createElement('div');
         overlay.setAttribute('data-i18n-modal', 'true'); // Mark as modal for event filtering
@@ -80,25 +113,65 @@
             max-width: 600px;
         `;
         
-        // Create label
-        const label = document.createElement('div');
-        label.style.cssText = `
+        // Create key label
+        const keyLabel = document.createElement('div');
+        keyLabel.style.cssText = `
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             font-size: 14px;
             color: #666;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             font-weight: 500;
         `;
-        label.textContent = `${ns}:${key}`;
+        keyLabel.textContent = `${ns}:${key}`;
         
-        // Create input
+        // Rendered text label
+        const renderedLabel = document.createElement('div');
+        renderedLabel.style.cssText = `
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+            font-weight: 500;
+        `;
+        renderedLabel.textContent = 'Rendered (read-only):';
+        
+        // Rendered text display (readonly)
+        const renderedDisplay = document.createElement('input');
+        renderedDisplay.type = 'text';
+        renderedDisplay.value = renderedText;
+        renderedDisplay.readOnly = true;
+        renderedDisplay.style.cssText = `
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            box-sizing: border-box;
+            background: #f5f5f5;
+            color: #666;
+            margin-bottom: 12px;
+        `;
+        
+        // Template label
+        const templateLabel = document.createElement('div');
+        templateLabel.style.cssText = `
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+            font-weight: 500;
+        `;
+        templateLabel.textContent = 'Template (editable):';
+        
+        // Template input (editable)
         const input = document.createElement('input');
         input.type = 'text';
-        input.value = oldText;
+        input.value = editableText;
         input.dataset.i18nEditor = '1';
         input.dataset.i18nKey = key;
         input.dataset.i18nNs = ns;
-        input.dataset.i18nOld = oldText;
+        input.dataset.i18nOld = editableText;
         input.style.cssText = `
             width: 100%;
             padding: 10px;
@@ -119,7 +192,10 @@
         `;
         hint.textContent = 'Press Enter to save, Escape to cancel';
         
-        container.appendChild(label);
+        container.appendChild(keyLabel);
+        container.appendChild(renderedLabel);
+        container.appendChild(renderedDisplay);
+        container.appendChild(templateLabel);
         container.appendChild(input);
         container.appendChild(hint);
         overlay.appendChild(container);
@@ -134,7 +210,7 @@
             const payload = [{
                 key: key,
                 ns: ns,
-                old: oldText,
+                old: editableText,
                 new: newText,
             }];
             
