@@ -1,36 +1,124 @@
 # i18n Text Editor Chrome Extension
 
-> ⚠️ **Vibe-Coded Disclaimer**: This extension was created during an AI-assisted coding session with zero manual code writing or review. It modifies your files with reckless abandon. Use at your own risk, or better yet, don't use it at all. The developer (an AI) accepts no responsibility for eaten files, broken keyboards, or existential crises. You have been warned. 🤖
+> ⚠️ **AI-Generated Disclaimer**: This extension was created during an AI-assisted coding session. It modifies your JSON files directly. Use at your own risk. 🤖
 
-Click-to-edit Chrome extension for i18next translations with automatic JSON file updates via native messaging.
+Click-to-edit Chrome extension for i18next translations with automatic JSON file updates.
 
-## Features
+## What It Does
 
-- Click any translated text to edit inline
-- Automatic updates to JSON resource files (with timestamped backups)
-- Multi-namespace support
-- Visual notifications for success/errors
+Click any translated text in your React app → Edit it in a modal → Press Enter → JSON file updated automatically with timestamped backup.
 
 ## Prerequisites
 
-- Node.js 12+
-- Chrome 88+ (Manifest V3)
-- Web app with `window.i18next` exposed
+- **Node.js** 12+
+- **Chrome** 88+ (Manifest V3)
+- **React app** with i18next
+- **File structure**: `locales/{lang}/{namespace}.json` (e.g., `locales/de/reviewed.json`)
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Your React App (Development Mode)                           │
+│                                                              │
+│  1. i18next postProcessor wraps translations with markers:  │
+│     t("common.logout") → "[[i18n|reviewed|common.logout]]   │
+│                           Abmelden[[/i18n]]"                 │
+│                                                              │
+│  2. i18n-dom-tagger (MutationObserver) processes DOM:       │
+│     - Strips markers from visible text/attributes           │
+│     - Adds data-i18n-* attributes to elements               │
+│                                                              │
+│  3. Result in DOM:                                          │
+│     <button data-i18n-text-keys="common.logout"             │
+│             data-i18n-text-ns="reviewed">                   │
+│       Abmelden                                              │
+│     </button>                                               │
+└──────────────────────────────────┬──────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Chrome Extension (click on text)                            │
+│                                                              │
+│  Content Script → Bridge → Background → Native Host         │
+└──────────────────────────────────┬──────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Native Messaging Host (Node.js)                             │
+│                                                              │
+│  - Searches reviewed.json, then old.json for key            │
+│  - Creates timestamped backup                               │
+│  - Updates JSON file with new value                         │
+│  - Returns success/error to extension                       │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Installation
 
+### 1. Prepare Your React App
+
+**Copy the DOM tagger:**
 ```bash
-# 1. Install native messaging host
+cp sample-integration/i18n-dom-tagger.ts src/i18n-dom-tagger.ts
+```
+
+**Add postProcessor to i18n config** (before `.init()`):
+
+```typescript
+// src/i18n.ts
+import i18n from "i18next";
+
+i18n.use({
+    type: "postProcessor",
+    name: "i18nmark",
+    process(value: string, key: string, opts: any, translator: any) {
+        if (process.env.NODE_ENV !== "development") return value;
+        const ns = opts?.ns || translator?.translator?.options?.defaultNS || "translation";
+        return `[[i18n|${ns}|${key}]]${value}[[/i18n]]`;
+    },
+});
+
+i18n
+    .use(/* ... other plugins ... */)
+    .init({
+        postProcess: ["i18nmark"], // Enable marker
+        // ... rest of config
+    });
+```
+
+**Activate tagger in main entry point:**
+
+```typescript
+// src/main.tsx
+import "./i18n"; // Import i18n config first
+import { installI18nDomTagger } from "./i18n-dom-tagger";
+
+installI18nDomTagger(); // Only runs in development
+
+// ... rest of your app
+```
+
+**Verify it works:**
+- Open DevTools → Elements tab
+- Inspect a translated element
+- Should see `data-i18n-text-keys` and `data-i18n-text-ns` attributes
+- Should **not** see `[[i18n|...]]` markers in visible text
+
+### 2. Install Extension
+
+```bash
 cd i18n-editor-extension
 ./build/install-native.bash
 
-# 2. Load extension in Chrome
-# - Open chrome://extensions
-# - Enable "Developer mode"
-# - Click "Load unpacked", select this directory
-# - Copy the Extension ID
+# Follow output instructions to:
+# 1. Load extension in chrome://extensions
+# 2. Copy extension ID and update native host config
+```
 
-# 3. Update native host config with your extension ID
+Update native host config with your extension ID:
+
+```bash
 # macOS:
 sed -i '' 's/YOUR_EXTENSION_ID/your-actual-id/' \
   "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.i18ntexteditor.host.json"
@@ -38,196 +126,231 @@ sed -i '' 's/YOUR_EXTENSION_ID/your-actual-id/' \
 # Linux:
 sed -i 's/YOUR_EXTENSION_ID/your-actual-id/' \
   "$HOME/.config/google-chrome/NativeMessagingHosts/com.i18ntexteditor.host.json"
-
-# 4. Configure extension
-# - Click extension icon → Settings
-# - Set absolute path to locales (e.g., /Users/you/project/src/assets/locales)
-# - Set language code (e.g., de, en)
-# - Save
-
-# 5. Enable editor
-# - Click extension icon → "Enable Editor"
-# - Or in console: starti18ndebug()
 ```
+
+### 3. Configure Extension
+
+Click extension icon → Settings:
+
+- **Resource Bundle Root**: `/absolute/path/to/your/project/src/assets/locales`
+- **Language Code**: `de` (the language you want to edit)
+- **Skip old value verification**: ☐ (optional, for force updates)
+
+Click **Save Settings**.
+
+### 4. Enable Editor
+
+Click **Enable Editor** in popup, or run in console:
+
+```javascript
+starti18ndebug()
+```
+
+State persists across page reloads.
 
 ## Usage
 
-```javascript
-// Enable/disable
-starti18ndebug()
-stopi18ndebug()
+1. **Enable editor** (popup or console)
+2. **Click** any translated text or input field
+3. **Modal opens** showing:
+   - Rendered text (read-only, with interpolations like "Step 1 of 3")
+   - Template text (editable, with placeholders like "Step {{current}} of {{total}}")
+4. **Edit** the template text
+5. **Press Enter** → File updated, backup created
+6. **Press Escape** → Cancel
 
-// Then click any translated text to edit
-// Press Enter/Tab to save, Escape to cancel
+**To disable:**
+
+```javascript
+stopi18ndebug()
+```
+
+## Supported Patterns
+
+The extension detects elements with these attributes (auto-generated by i18n-dom-tagger):
+
+**Text content:**
+```html
+<button data-i18n-text-keys="common.logout" data-i18n-text-ns="reviewed">
+  Abmelden
+</button>
+```
+
+**Translated attributes** (placeholder, title, alt, etc.):
+```html
+<input 
+  placeholder="Suchen..."
+  data-i18n-attr="placeholder"
+  data-i18n-placeholder-ns="reviewed"
+  data-i18n-placeholder-key="search.placeholder"
+/>
+```
+
+**Multiple translations** (comma-separated, edits first key only):
+```html
+<div data-i18n-text-keys="key1,key2" data-i18n-text-ns="ns1,ns2">
+  Text with multiple translations
+</div>
+```
+
+## File Updates
+
+### Namespace Resolution
+
+The extension searches for keys in this order:
+
+1. **`reviewed.json`** (check first)
+2. **`old.json`** (fallback)
+3. **Error** (key not found)
+
+This allows gradual migration from `old` to `reviewed` namespace. The update happens in whichever file contains the key.
+
+### Language Selection
+
+The extension uses the **configured language** from settings, not auto-detection.
+
+To edit French translations: Set "Language Code" to `fr` in settings.
+
+### Backups
+
+First update to a file creates a timestamped backup:
+
+```
+reviewed.json → reviewed.json.backup-2025-01-15T10-30-45
+```
+
+Subsequent updates in the same session don't create new backups.
+
+## i18n-dom-tagger Details
+
+The DOM tagger is a MutationObserver that processes translation markers:
+
+**For text nodes:**
+```html
+<!-- Before (DOM from React) -->
+<button>[[i18n|reviewed|common.logout]]Abmelden[[/i18n]]</button>
+
+<!-- After (DOM tagger processes it) -->
+<button data-i18n-text-keys="common.logout" data-i18n-text-ns="reviewed">
+  Abmelden
+</button>
+```
+
+**For attributes:**
+```html
+<!-- Before -->
+<input placeholder="[[i18n|reviewed|search.placeholder]]Suchen...[[/i18n]]" />
+
+<!-- After -->
+<input 
+  placeholder="Suchen..."
+  data-i18n-attr="placeholder"
+  data-i18n-placeholder-ns="reviewed"
+  data-i18n-placeholder-key="search.placeholder"
+/>
+```
+
+**Performance characteristics:**
+- Debounced (batches DOM changes, setTimeout 0)
+- In-place mutations (no node add/remove)
+- Dev-only (completely disabled in production)
+- Minimal overhead (only processes marked nodes)
+
+## Troubleshooting
+
+**"Element not editable" notification:**
+- Missing data attributes → Check i18n-dom-tagger is installed and running
+- Verify postProcessor is configured: `postProcess: ["i18nmark"]`
+- Inspect element in DevTools → should have `data-i18n-text-keys` attribute
+
+**Markers visible in UI** (`[[i18n|...]]`):
+- i18n-dom-tagger not running
+- Check console for errors
+- Verify `process.env.NODE_ENV === 'development'`
+
+**No data attributes on elements:**
+- PostProcessor not configured in i18next
+- Check `postProcess: ["i18nmark"]` in i18next.init()
+- Verify postProcessor is defined before `.init()`
+
+**Updates don't persist:**
+- Path must be **absolute** (e.g., `/Users/you/project/src/assets/locales`)
+- Verify path exists and Node.js has write permissions
+- Check extension ID in native host config matches chrome://extensions
+- Look for `.backup-*` files to confirm writes are happening
+
+**Wrong language file updated:**
+- Check "Language Code" in extension settings
+- Ensure it matches the language you want to edit
+- Verify folder structure: `locales/{lang}/{namespace}.json`
+
+**Native host errors:**
+
+```bash
+# Verify installation
+ls -la "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.i18ntexteditor.host.json"
+
+# Make executable
+chmod +x i18n-editor-extension/native/host/native-messaging-host.js
+
+# Test manually
+echo '{"root":"/path/to/locales","lang":"de","payload":[{"key":"test.key","ns":"reviewed","old":"old","new":"new"}]}' | \
+  node i18n-editor-extension/native/host/native-messaging-host.js
+
+# View native host logs (run Chrome from terminal)
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome
 ```
 
 ## Architecture
 
-### Components
-1. **Content Script** (`content-script.js`) - Runs in page's main world, accesses `window.i18next`, provides inline editor
-2. **Bridge Script** (`bridge.js`) - Runs in isolated world, handles Chrome API communication
-3. **Background Worker** (`background.js`) - Routes messages, uses `chrome.runtime.sendNativeMessage()`
-4. **Native Host** (`native-messaging-host.js`) - Node.js process, receives stdin, updates files, sends stdout
-5. **File Updater** (`update-i18n.js`) - Performs JSON updates with validation and backups
+**Extension Components:**
+- `content-script.js` - Detects clicks, shows modal editor (runs in page context)
+- `bridge.js` - Relays messages between page and extension (isolated context)
+- `background.js` - Routes messages to native host (service worker)
+- `popup.html/js` - Settings UI
 
-### Chrome Native Messaging Protocol
-Messages are framed: `[4-byte length (little-endian)][UTF-8 JSON]`
+**Native Components:**
+- `native-messaging-host.js` - Receives messages via stdin, sends responses via stdout
+- `update-i18n.js` - Performs JSON file updates with backups
 
-**Critical**: Must use UTF-8 byte length, not character length
-```javascript
-// ❌ WRONG: Multi-byte chars (ä, ö, ü) break this
-const len = jsonString.length;
+**React App Helper:**
+- `i18n-dom-tagger.ts` - MutationObserver that strips markers and adds attributes (copy to your project)
 
-// ✅ CORRECT
-const len = Buffer.byteLength(jsonString, 'utf8');
+**Message Flow:**
 ```
-
-### Process Lifecycle
-1. Chrome calls `sendNativeMessage()` → spawns new Node.js process per request
-2. Native host reads stdin, processes, writes stdout, exits
-3. Must flush stdout before exit to avoid race conditions:
-```javascript
-process.stdout.write(buffer, (err) => {
-  process.stdout.end();
-});
-process.stdout.on('finish', () => process.exit(0));
+Page Click → Content Script → Bridge → Background → Native Host → File Update
 ```
-
-### Execution Contexts
-- Content scripts default to **isolated world** (no access to page JS)
-- Use `"world": "MAIN"` in manifest to run in page context (access `window.i18next`)
-- Bridge script in isolated world handles Chrome APIs (`chrome.runtime`)
-- Communication via `window.postMessage()` between contexts
-
-## File Structure
-
-```
-i18n-editor-extension/
-├── manifest.json              # Chrome extension config (Manifest V3)
-├── src/
-│   ├── content/
-│   │   ├── content-script.js # Editor UI (main world)
-│   │   └── bridge.js         # Chrome API bridge (isolated world)
-│   ├── background/
-│   │   └── background.js     # Service worker
-│   └── popup/
-│       ├── popup.html        # Settings UI
-│       └── popup.js
-├── native/
-│   ├── host/
-│   │   └── native-messaging-host.js  # Native host
-│   └── update-i18n.js                # File updater
-├── config/
-│   └── host-config.json              # Template for installation
-└── build/
-    └── install-native.bash           # Install script
-```
-
-**Native host location after installation:**
-- macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.i18ntexteditor.host.json`
-- Linux: `~/.config/google-chrome/NativeMessagingHosts/com.i18ntexteditor.host.json`
-
-## Configuration
-
-### Host Name Validation
-Chrome requires reverse-domain format: `com.i18ntexteditor.host`
-- Lowercase only
-- Alphanumeric, dots, underscores
-- No leading/trailing dots, no consecutive dots
-- Config filename must match: `com.i18ntexteditor.host.json`
-
-### Extension ID
-Must match in native host config's `allowed_origins`. Extension ID changes when reloaded in developer mode.
-
-### Resource Structure
-```
-project/
-└── src/assets/locales/    # Configured root (absolute path)
-    ├── de/
-    │   ├── common.json
-    │   └── ui.json
-    └── en/
-        ├── common.json
-        └── ui.json
-```
-
-JSON format:
-```json
-{
-  "welcome": {
-    "title": "Welcome",
-    "message": "Hello"
-  }
-}
-```
-
-## Troubleshooting
-
-**"Native host not found"**
-```bash
-# Check file exists and has correct name
-ls -la "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.i18ntexteditor.host.json"
-
-# Verify name field matches
-cat "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.i18ntexteditor.host.json" | grep name
-
-# Check executable permissions
-chmod +x native/host/native-messaging-host.js
-```
-
-**Extension ID mismatch**
-```bash
-# Get your extension ID from chrome://extensions
-# Update config:
-sed -i '' 's/YOUR_EXTENSION_ID/actual-id/' \
-  "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.i18ntexteditor.host.json"
-```
-
-**File updates fail**
-- Use absolute path (not relative) for resource root
-- Verify language code matches directory structure
-- Check Node.js has write permissions
-
-**View logs**
-```bash
-# Run Chrome from terminal to see stderr
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome
-```
-
-## Key Technical Solutions
-
-1. **UTF-8 Byte Length**: Chrome's protocol requires byte count, not character count for multi-byte UTF-8
-2. **Stdout Flushing**: Must wait for stdout flush before process exit to avoid race conditions
-3. **Main World Execution**: Content script needs `"world": "MAIN"` to access page JS
-4. **Bridge Pattern**: Separate script in isolated world for Chrome API access
-5. **Host Name Format**: Lowercase reverse-domain required by Chrome validation
 
 ## Development
 
-Debug:
-- Content script: Browser console
-- Background: `chrome://extensions` → Inspect service worker
-- Native host: Run Chrome from terminal, watch stderr
+**File structure:**
+```
+i18n-editor-extension/
+├── src/
+│   ├── content/          # Content scripts
+│   ├── background/       # Service worker
+│   └── popup/           # Settings UI
+├── native/
+│   ├── host/            # Native messaging host
+│   └── update-i18n.js   # JSON updater
+├── sample-integration/
+│   └── i18n-dom-tagger.ts  # Copy to your project
+├── build/
+│   └── install-native.bash # Installer
+└── manifest.json
+```
 
-Message format:
-```json
-{
-  "root": "/absolute/path/to/locales",
-  "lang": "de",
-  "force": false,
-  "payload": [
-    {
-      "key": "welcome.message",
-      "ns": "common",
-      "old": "Old text",
-      "new": "New text"
-    }
-  ]
-}
+**Testing:**
+```bash
+# Test update logic
+cd native
+node test-update-logic.js
+
+# Test native host manually
+echo '{"root":"/path/to/locales","lang":"de","payload":[{"key":"test","ns":"reviewed","old":"old","new":"new"}]}' | \
+  node host/native-messaging-host.js
 ```
 
 ## License
 
 MIT License - See [LICENSE](LICENSE) file for details.
-
-Open source. Modify and distribute freely (at your own risk, see disclaimer above).

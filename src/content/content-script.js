@@ -1,4 +1,4 @@
-/* i18n-debug.js — click→reveal i18next keys (namespace-aware) + inline edit
+/* i18n-debug.js — Simple click-to-edit for i18next translations
    Chrome Extension Content Script Version
    
    Console API:
@@ -6,91 +6,46 @@
      stopi18ndebug();    // disable
 
    Behavior:
-     • Click a translated text → finds exact matches across all namespaces
-     • Replaces the clicked text with an input for inline editing.
-     • On Enter/Tab → sends update to background script for file modification
-     • On Escape → cancels editing
+     • Click a translated text with data-i18n-text-keys attribute
+     • Edit inline
+     • On Enter/Tab → updates JSON file
+     • On Escape → cancels
 */
 
 (() => {
     if (window.starti18ndebug && window.stopi18ndebug) return;
 
     // ---------- helpers ----------
-    const NORM = (s) =>
-        String(s ?? "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .toLowerCase();
-
-    function flatten(obj, prefix = "", out = {}) {
-        if (!obj || typeof obj !== "object") return out;
-        for (const [k, v] of Object.entries(obj)) {
-            const key = prefix ? `${prefix}.${k}` : k;
-            if (v && typeof v === "object") flatten(v, key, out);
-            else out[key] = v;
-        }
-        return out;
-    }
-
-    function cssPath(el) {
-        if (!(el instanceof Element)) return "";
-        const parts = [];
-        while (el && el.nodeType === 1 && el !== document.body) {
-            let p = el.nodeName.toLowerCase();
-            if (el.id) {
-                p += `#${el.id}`;
-                parts.unshift(p);
-                break;
-            }
-            if (typeof el.className === "string" && el.className) {
-                const cls = el.className.trim().split(/\s+/).slice(0, 3).join(".");
-                if (cls) p += `.${cls}`;
-            }
-            const sibs = Array.from(el.parentNode?.children || []);
-            const same = sibs.filter((n) => n.nodeName === el.nodeName);
-            if (same.length > 1) p += `:nth-of-type(${same.indexOf(el) + 1})`;
-            parts.unshift(p);
-            el = el.parentElement;
-        }
-        return parts.join(" > ");
-    }
-
-    async function ensureBundles(i18n, _lang, namespaces) {
+    // Load template from JSON files via background script
+    async function loadTemplate(key) {
         try {
-            await i18n.loadNamespaces(namespaces);
-        } catch {}
-    }
-
-    function getBundle(i18n, lang, ns) {
-        let bundle = i18n.store?.data?.[lang]?.[ns];
-        if (!bundle && typeof i18n.getResourceBundle === "function") {
-            try {
-                bundle = i18n.getResourceBundle(lang, ns);
-            } catch {}
+            const response = await new Promise((resolve) => {
+                window.postMessage({
+                    type: 'i18n-editor-get-template',
+                    key: key
+                }, '*');
+                
+                const listener = (event) => {
+                    if (event.data.type === 'i18n-editor-template-response') {
+                        window.removeEventListener('message', listener);
+                        resolve(event.data);
+                    }
+                };
+                window.addEventListener('message', listener);
+                
+                setTimeout(() => {
+                    window.removeEventListener('message', listener);
+                    resolve({ template: null, error: 'Timeout' });
+                }, 3000);
+            });
+            
+            return response.template;
+        } catch (error) {
+            console.error('[i18n-debug] Error loading template:', error);
+            return null;
         }
-        return bundle || {};
     }
-
-    function buildIndex(i18n, lang, namespaces) {
-        const index = [];
-        for (const ns of namespaces) {
-            const flat = flatten(getBundle(i18n, lang, ns));
-            index.push({ ns, flat, keys: Object.keys(flat) });
-        }
-        return index;
-    }
-
-    function rankByNs(list, defaultNS, fallbackNS) {
-        return list.slice().sort((a, b) => {
-            const score = (c) => (c.ns === defaultNS ? 2 : c.ns === fallbackNS ? 1 : 0);
-            return score(b) - score(a);
-        });
-    }
-
-    function isEditableInput(el) {
-        return el && el.nodeType === 1 && el.tagName === "INPUT" && el.dataset.i18nEditor === "1";
-    }
-
+    
     // Show notification in page
     function showNotification(message, type = 'info') {
         const notification = document.createElement('div');
@@ -126,61 +81,146 @@
         }, 3000);
     }
 
-    // Create an inline editor for the clicked element
-    function makeInlineEditor(targetEl, ns, key, oldText, allExact) {
-        const widthPx = Math.max(80, targetEl.clientWidth || 0);
-
-        const input = document.createElement("input");
-        input.type = "text";
-        input.value = oldText;
-        input.dataset.i18nEditor = "1";
+    // Create a floating overlay editor (for form elements and attributes)
+    async function makeFloatingEditor(targetEl, ns, key, renderedText) {
+        // Load the template from JSON
+        const template = await loadTemplate(key);
+        const editableText = template || renderedText; // Fallback to rendered if template not found
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.setAttribute('data-i18n-modal', 'true'); // Mark as modal for event filtering
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999999;
+        `;
+        
+        // Create editor container
+        const container = document.createElement('div');
+        container.style.cssText = `
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            min-width: 400px;
+            max-width: 600px;
+        `;
+        
+        // Create key label
+        const keyLabel = document.createElement('div');
+        keyLabel.style.cssText = `
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 12px;
+            font-weight: 500;
+        `;
+        keyLabel.textContent = `${ns}:${key}`;
+        
+        // Rendered text label
+        const renderedLabel = document.createElement('div');
+        renderedLabel.style.cssText = `
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+            font-weight: 500;
+        `;
+        renderedLabel.textContent = 'Rendered (read-only):';
+        
+        // Rendered text display (readonly)
+        const renderedDisplay = document.createElement('input');
+        renderedDisplay.type = 'text';
+        renderedDisplay.value = renderedText;
+        renderedDisplay.readOnly = true;
+        renderedDisplay.style.cssText = `
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            box-sizing: border-box;
+            background: #f5f5f5;
+            color: #666;
+            margin-bottom: 12px;
+        `;
+        
+        // Template label
+        const templateLabel = document.createElement('div');
+        templateLabel.style.cssText = `
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+            font-weight: 500;
+        `;
+        templateLabel.textContent = 'Template (editable):';
+        
+        // Template input (editable)
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = editableText;
+        input.dataset.i18nEditor = '1';
         input.dataset.i18nKey = key;
         input.dataset.i18nNs = ns;
-        input.dataset.i18nOld = oldText;
-
-        input.style.width = widthPx ? widthPx + "px" : "auto";
-        input.style.boxSizing = "border-box";
-        input.style.font = getComputedStyle(targetEl).font;
-        input.style.padding = "2px 6px";
-        input.style.margin = "0";
-        input.style.border = "1px solid #ccc";
-        input.style.borderRadius = "4px";
-        input.style.background = "white";
-        input.style.color = getComputedStyle(targetEl).color;
-
-        const oldHTML = targetEl.innerHTML;
-        targetEl.dataset.i18nOldHTML = oldHTML;
-        targetEl.innerHTML = "";
-        targetEl.appendChild(input);
+        input.dataset.i18nOld = editableText;
+        input.style.cssText = `
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #2196F3;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 14px;
+            box-sizing: border-box;
+        `;
+        
+        // Create hint text
+        const hint = document.createElement('div');
+        hint.style.cssText = `
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px;
+            color: #999;
+            margin-top: 8px;
+        `;
+        hint.textContent = 'Press Enter to save, Escape to cancel';
+        
+        container.appendChild(keyLabel);
+        container.appendChild(renderedLabel);
+        container.appendChild(renderedDisplay);
+        container.appendChild(templateLabel);
+        container.appendChild(input);
+        container.appendChild(hint);
+        overlay.appendChild(container);
+        document.body.appendChild(overlay);
+        
         input.focus();
         input.select();
-
+        
         async function commit() {
             const newText = input.value;
-
-            // Get current language from i18next
-            const i18n = window.i18next || window.i18n;
-            const currentLang = i18n?.resolvedLanguage || i18n?.language || null;
-
-            // EVERY exact match gets the same {new} value
-            const all = (allExact && allExact.length ? allExact : [{ ns, key }]).map((c) => ({
-                key: c.key,
-                ns: c.ns,
-                old: oldText,
+            
+            const payload = [{
+                key: key,
+                ns: ns,
+                old: editableText,
                 new: newText,
-            }));
-
-            // Send to background script via bridge
+            }];
+            
             try {
                 const response = await new Promise((resolve) => {
-                    // Send to bridge script with current language
                     window.postMessage({
                         type: 'i18n-editor-update',
-                        payload: all,
-                        language: currentLang  // Include current language
+                        payload: payload
                     }, '*');
                     
-                    // Listen for response
                     const listener = (event) => {
                         if (event.data.type === 'i18n-editor-update-response') {
                             window.removeEventListener('message', listener);
@@ -189,173 +229,179 @@
                     };
                     window.addEventListener('message', listener);
                     
-                    // Timeout after 10 seconds
                     setTimeout(() => {
                         window.removeEventListener('message', listener);
                         resolve({ success: false, error: 'Timeout waiting for response' });
                     }, 10000);
                 });
-
+                
                 if (response && response.success) {
-                    console.log("[i18n-debug] ✅ File updated successfully");
-                    showNotification(`Updated ${all.length} translation${all.length > 1 ? 's' : ''}`, 'success');
-                    
-                    // Replace editor with the new text
-                    targetEl.innerHTML = "";
-                    targetEl.textContent = newText;
+                    console.log(`[i18n-debug] ✅ Updated ${ns}:${key}`);
+                    showNotification(`Updated: ${key}`, 'success');
+                    document.body.removeChild(overlay);
                 } else {
-                    console.error("[i18n-debug] ❌ File update failed:", response?.error);
+                    console.error("[i18n-debug] ❌ Update failed:", response?.error);
                     showNotification(`Update failed: ${response?.error || 'Unknown error'}`, 'error');
+                    document.body.removeChild(overlay);
                 }
             } catch (error) {
-                console.error("[i18n-debug] ❌ Communication error:", error);
-                showNotification(`Communication error: ${error.message}`, 'error');
+                console.error("[i18n-debug] ❌ Error:", error);
+                showNotification(`Error: ${error.message}`, 'error');
+                document.body.removeChild(overlay);
             }
         }
-
+        
         function cancel() {
-            targetEl.innerHTML = targetEl.dataset.i18nOldHTML || oldText;
-            delete targetEl.dataset.i18nOldHTML;
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
         }
-
-        input.addEventListener("keydown", (ev) => {
-            if (ev.key === "Enter" || ev.key === "Tab") {
+        
+        input.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
                 ev.preventDefault();
-                ev.stopPropagation();
                 commit();
-            } else if (ev.key === "Escape") {
+            } else if (ev.key === 'Escape') {
                 ev.preventDefault();
-                ev.stopPropagation();
                 cancel();
             }
         });
-
-        // Optional: blur commits UI text (no file write)
-        input.addEventListener("blur", () => {
-            if (isEditableInput(input)) {
-                input.dataset.i18nEditor = "0";
-                const newText = input.value;
-                targetEl.innerHTML = "";
-                targetEl.textContent = newText;
+        
+        // Click overlay to cancel
+        overlay.addEventListener('click', (ev) => {
+            if (ev.target === overlay) {
+                cancel();
             }
         });
+    }
+
+    // Always use floating modal editor - simple and avoids all DOM/event conflicts
+    function makeEditor(targetEl, ns, key, oldText) {
+        return makeFloatingEditor(targetEl, ns, key, oldText);
     }
 
     // ---------- main click handler ----------
     async function handler(e) {
-        if (isEditableInput(e.target)) return;
-
-        // With "world": "MAIN" in manifest.json, this script runs in the page context
-        // so window.i18next should be directly accessible
-        const i18n = window.i18next || window.i18n;
-        if (!i18n) {
-            console.warn(
-                "[i18n-debug] window.i18next not found. Expose your instance in i18n.ts: window.i18next = i18n;",
-            );
-            console.warn(
-                "[i18n-debug] Debug info - window keys with 'i18n':",
-                Object.keys(window).filter(key => key.toLowerCase().includes('i18n'))
-            );
-            return;
-        }
-
-        const raw = e.target;
-        const target = raw.nodeType === Node.TEXT_NODE ? raw.parentNode : raw;
-
+        // Always block the click from doing anything
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
 
-        const text =
-            raw.nodeType === Node.TEXT_NODE ? raw.nodeValue || "" : target.innerText || target.textContent || "";
-        const tN = NORM(text);
-        if (!tN) return;
+        const raw = e.target;
+        const target = raw.nodeType === Node.TEXT_NODE ? raw.parentNode : raw;
 
-        const lang = i18n.resolvedLanguage || i18n.language || "en";
-        const namespaces =
-            Array.isArray(i18n.options?.ns) && i18n.options.ns.length ? i18n.options.ns : ["translation"];
-        const defaultNS = i18n.options?.defaultNS || namespaces[0] || "translation";
-        const fallbackNS = Array.isArray(i18n.options?.fallbackNS)
-            ? i18n.options.fallbackNS[0]
-            : i18n.options?.fallbackNS || "";
-
-        await ensureBundles(i18n, lang, namespaces);
-        const index = buildIndex(i18n, lang, namespaces);
-
-        const exact = [];
-        const loose = [];
-
-        // Reverse match
-        for (const { ns, flat, keys } of index) {
-            for (const k of keys) {
-                const v = flat[k];
-                if (typeof v !== "string") continue;
-                const vN = NORM(v);
-                if (!vN) continue;
-                if (vN === tN) exact.push({ ns, key: k });
-                else if (vN.includes(tN) || tN.includes(vN)) loose.push({ ns, key: k });
+        // Pattern 1: Text content (data-i18n-text-keys, data-i18n-text-ns)
+        const textKeysRaw = target.dataset?.i18nTextKeys;
+        const textNsRaw = target.dataset?.i18nTextNs;
+        
+        if (textKeysRaw && textNsRaw) {
+            // Handle comma-separated values (i18n-dom-tagger can generate multiple keys)
+            const keys = textKeysRaw.split(',').map(k => k.trim()).filter(Boolean);
+            const namespaces = textNsRaw.split(',').map(n => n.trim()).filter(Boolean);
+            
+            // Use the first key/namespace pair (most common case)
+            const textKey = keys[0];
+            const textNs = namespaces[0];
+            
+            if (!textKey || !textNs) {
+                console.warn("[i18n-debug] Invalid i18n attributes (empty after parsing)");
+                showNotification("Element not editable: invalid i18n attributes", 'error');
+                return;
             }
-        }
-
-        // Verify with i18n.t to handle interpolation/plurals
-        const verify = (arr) => {
-            const ok = [];
-            for (const c of arr) {
-                try {
-                    const rendered = i18n.t(c.key, { ns: c.ns });
-                    if (NORM(rendered) === tN) ok.push(c);
-                } catch {}
+            
+            // Use the current text content as the template
+            const text = target.textContent || target.innerText || "";
+            
+            console.clear();
+            console.log(`[i18n-debug] Editing ${textNs}:${textKey}`);
+            if (keys.length > 1) {
+                console.log(`[i18n-debug] Note: Element has ${keys.length} keys, editing the first one`);
             }
-            return ok;
-        };
-
-        const exactVerified = verify(exact);
-        const looseVerified = verify(loose.slice(0, 100));
-
-        const bestExact = rankByNs(exactVerified.length ? exactVerified : exact, defaultNS, fallbackNS);
-        const bestLoose = rankByNs(looseVerified.length ? looseVerified : loose, defaultNS, fallbackNS);
-
-        // highlight briefly
-        if (target && target.style) {
-            target.style.outline = "2px solid red";
-            setTimeout(() => (target.style.outline = ""), 500);
-        }
-
-        console.clear();
-        console.group("[i18n-debug] lookup + edit");
-        console.log("Element:", target);
-        console.log("CSS path:", cssPath(target));
-        console.log("Language:", lang);
-        console.log("Namespaces:", namespaces.join(", "));
-        console.log("Text:", JSON.stringify(text));
-
-        if (bestExact.length) {
-            console.log(
-                "✅ Exact:",
-                bestExact.map((c) => `${c.ns}:${c.key}`),
-            );
-
-            // Open inline editor and pass the full exact list for commit-time uniform {new}
-            const top = bestExact[0];
-            makeInlineEditor(target, top.ns, top.key, text, bestExact);
-        } else {
-            console.log("❌ No exact match.");
-            if (bestLoose.length) {
-                console.log(
-                    "🤏 Loose:",
-                    bestLoose.map((c) => `${c.ns}:${c.key}`),
-                );
+            console.log("Current value:", JSON.stringify(text));
+            
+            // Highlight briefly
+            if (target && target.style) {
+                target.style.outline = "2px solid #4CAF50";
+                setTimeout(() => (target.style.outline = ""), 500);
             }
+            
+            // Open modal editor
+            makeEditor(target, textNs, textKey, text);
+            return;
         }
-
-        if (!bestExact.length && !bestLoose.length) {
-            console.log("No candidates found in current bundles.");
+        
+        // Pattern 2: Attribute content (data-i18n-attr, data-i18n-{attr}-ns, data-i18n-{attr}-key)
+        const attrListRaw = target.dataset?.i18nAttr;
+        
+        if (attrListRaw) {
+            // Handle comma-separated attribute names (i18n-dom-tagger can tag multiple attributes)
+            const attrNames = attrListRaw.split(',').map(a => a.trim()).filter(Boolean);
+            
+            // Use the first attribute (most common case)
+            const attrName = attrNames[0];
+            
+            if (!attrName) {
+                console.warn("[i18n-debug] Invalid data-i18n-attr (empty after parsing)");
+                showNotification("Element not editable: invalid i18n-attr", 'error');
+                return;
+            }
+            
+            const attrNsKey = `i18n${attrName.charAt(0).toUpperCase() + attrName.slice(1)}Ns`;
+            const attrKeyKey = `i18n${attrName.charAt(0).toUpperCase() + attrName.slice(1)}Key`;
+            
+            const ns = target.dataset[attrNsKey];
+            const key = target.dataset[attrKeyKey];
+            
+            if (!ns || !key) {
+                console.warn(`[i18n-debug] Element missing required attributes: data-i18n-${attrName}-ns and data-i18n-${attrName}-key`);
+                showNotification(`Element not editable: missing i18n-${attrName} attributes`, 'error');
+                return;
+            }
+            
+            // Use the current attribute value
+            const currentValue = target.getAttribute(attrName) || "";
+            
+            console.clear();
+            console.log(`[i18n-debug] Editing ${ns}:${key} (attribute: ${attrName})`);
+            if (attrNames.length > 1) {
+                console.log(`[i18n-debug] Note: Element has ${attrNames.length} translated attributes, editing the first one`);
+            }
+            console.log("Current value:", JSON.stringify(currentValue));
+            
+            // Highlight briefly
+            if (target && target.style) {
+                target.style.outline = "2px solid #2196F3";
+                setTimeout(() => (target.style.outline = ""), 500);
+            }
+            
+            // Open modal editor
+            makeEditor(target, ns, key, currentValue);
+            return;
         }
-        console.groupEnd();
+        
+        // No supported attributes found
+        console.warn("[i18n-debug] Element missing required i18n attributes");
+        showNotification("Element not editable: missing i18n attributes", 'error');
     }
 
     // ---------- public controls ----------
     const capture = true;
+    
+    // Block all user interactions with the page (except modal)
+    function blockInteraction(e) {
+        const target = e.target;
+        
+        // Allow interaction with modal overlay elements only
+        if (target.closest && target.closest('[data-i18n-modal]')) {
+            return;
+        }
+        
+        // Block everything else
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+    }
+    
     window.starti18ndebug = function starti18ndebug() {
         if (window.__i18nDebugActive) {
             console.info("[i18n-debug] already running.");
@@ -363,7 +409,27 @@
         }
         window.__i18nDebugActive = true;
         window.__i18nNSInspector = handler;
+        
+        // Capture click to intercept before any app handlers
         document.addEventListener("click", handler, capture);
+        
+        // Block all other interactions (click is handled separately by handler)
+        const blockEvents = ['mousedown', 'mouseup', 'dblclick', 'contextmenu', 
+                             'keydown', 'keypress', 'keyup', 
+                             'touchstart', 'touchend', 'touchmove',
+                             'submit', 'change', 'input', 'focus', 'blur',
+                             'pointerdown', 'pointerup', 'pointermove'];
+        
+        blockEvents.forEach(eventType => {
+            document.addEventListener(eventType, blockInteraction, capture);
+        });
+        
+        // Store event types for cleanup
+        window.__i18nBlockedEvents = blockEvents;
+        
+        // Add visual indicator that page is in edit mode
+        document.body.style.cursor = 'crosshair';
+        
         console.info(
             "[i18n-debug] enabled. Click translated text to reveal keys and edit. " +
                 "Enter/Tab updates files automatically.",
@@ -382,7 +448,21 @@
             console.info("[i18n-debug] not running.");
             return;
         }
+        
+        // Remove click handler
         document.removeEventListener("click", window.__i18nNSInspector, capture);
+        
+        // Remove all blocked event listeners
+        if (window.__i18nBlockedEvents) {
+            window.__i18nBlockedEvents.forEach(eventType => {
+                document.removeEventListener(eventType, blockInteraction, capture);
+            });
+            delete window.__i18nBlockedEvents;
+        }
+        
+        // Restore cursor
+        document.body.style.cursor = '';
+        
         window.__i18nNSInspector = undefined;
         window.__i18nDebugActive = false;
         console.info("[i18n-debug] disabled.");

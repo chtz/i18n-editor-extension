@@ -6,11 +6,10 @@ window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     
     if (event.data.type === 'i18n-editor-update') {
-        // Forward to background script with language
+        // Forward to background script (language comes from extension config)
         chrome.runtime.sendMessage({
             type: 'UPDATE_TRANSLATION',
-            payload: event.data.payload,
-            language: event.data.language  // Forward current language
+            payload: event.data.payload
         }, (response) => {
             // Send response back to page context
             window.postMessage({
@@ -34,6 +33,19 @@ window.addEventListener('message', (event) => {
             window.postMessage({
                 type: 'i18n-editor-state-restored',
                 enabled: enabled
+            }, '*');
+        });
+    }
+    
+    if (event.data.type === 'i18n-editor-get-template') {
+        // Request template from background script
+        chrome.runtime.sendMessage({
+            type: 'GET_TEMPLATE',
+            key: event.data.key
+        }, (response) => {
+            window.postMessage({
+                type: 'i18n-editor-template-response',
+                template: response?.template || null
             }, '*');
         });
     }

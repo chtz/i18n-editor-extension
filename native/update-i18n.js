@@ -7,6 +7,7 @@ const path = require('path');
 
 /**
  * Updates i18n translation files based on payload
+ * Strategy: Check reviewed.json first, then fall back to old.json
  * @param {Object} config - Configuration object
  * @param {string} config.root - Root directory for locales (default: src/assets/locales)
  * @param {string} config.lang - Language code (default: de)
@@ -25,81 +26,97 @@ function updateI18n(config) {
     // Normalize to an array of items
     const items = Array.isArray(payload) ? payload : [payload];
     
-    // Validate required fields
+    // Validate required fields (ns is optional now - we'll search for the key)
     items.forEach((item, idx) => {
-        if (!item.key || !item.ns || !item.old) {
-            throw new Error(`Item ${idx}: missing required field (key, ns, or old)`);
+        if (!item.key || !item.old) {
+            throw new Error(`Item ${idx}: missing required field (key or old)`);
         }
-    });
-    
-    // Group items by target file (namespace)
-    const files = {};
-    items.forEach(item => {
-        if (!files[item.ns]) files[item.ns] = [];
-        files[item.ns].push(item);
     });
     
     const updatedFiles = [];
     const errors = [];
     
-    // Process each file
-    Object.entries(files).forEach(([ns, list]) => {
-        const filePath = path.join(root, lang, `${ns}.json`);
-        
-        if (!fs.existsSync(filePath)) {
-            errors.push(`File not found: ${filePath}`);
+    // Define namespace priority: reviewed.json first, then old.json
+    const namespacePriority = ['reviewed', 'old'];
+    
+    // Process each item
+    items.forEach(item => {
+        if (!item.new) {
+            errors.push(`Skipping item without 'new' value: ${item.key}`);
             return;
         }
         
-        try {
-            // Read and parse JSON
-            const jsonData = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        let foundInNamespace = null;
+        let foundData = null;
+        let foundFilePath = null;
+        
+        // Search for key in namespaces (priority order)
+        for (const ns of namespacePriority) {
+            const filePath = path.join(root, lang, `${ns}.json`);
             
-            // Create backup
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const backupPath = `${filePath}.${timestamp}.bak`;
-            fs.copyFileSync(filePath, backupPath);
+            if (!fs.existsSync(filePath)) {
+                console.error(`[DEBUG] File not found: ${filePath}`);
+                continue;
+            }
             
-            // Update values
-            let changes = 0;
-            list.forEach(item => {
-                if (!item.new) {
-                    errors.push(`Skipping item without 'new' value: ${ns}.${item.key}`);
-                    return;
-                }
+            try {
+                const jsonData = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
                 
-                try {
-                    const cursor = traversePath(jsonData, item.key);
-                    const currentValue = cursor.value;
-                    const currentStr = typeof currentValue === 'string' ? currentValue : String(currentValue);
-                    
-                    if (!force && currentStr !== item.old) {
-                        errors.push(`Mismatch for ${ns}.${item.key}: current="${currentStr}", expected="${item.old}"`);
-                        return;
-                    }
-                    
-                    cursor.value = item.new;
-                    changes++;
-                    console.log(`Updated ${ns}.${item.key}: "${item.old}" -> "${item.new}"`);
-                    
-                } catch (error) {
-                    errors.push(`Error updating ${ns}.${item.key}: ${error.message}`);
+                // Check if key exists in this namespace
+                if (keyExists(jsonData, item.key)) {
+                    foundInNamespace = ns;
+                    foundData = jsonData;
+                    foundFilePath = filePath;
+                    console.error(`[DEBUG] Key ${item.key} found in ${ns}.json`);
+                    break;
                 }
-            });
+            } catch (error) {
+                console.error(`[DEBUG] Error reading ${filePath}: ${error.message}`);
+                continue;
+            }
+        }
+        
+        // If key not found in any namespace, error
+        if (!foundInNamespace) {
+            errors.push(`Key not found in any namespace: ${item.key} (searched: ${namespacePriority.join(', ')})`);
+            return;
+        }
+        
+        // Perform the update
+        try {
+            // Create backup if this is the first change to this file
+            if (!updatedFiles.includes(foundFilePath)) {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const backupPath = `${foundFilePath}.backup-${timestamp}.json`;
+                fs.copyFileSync(foundFilePath, backupPath);
+                console.error(`[DEBUG] Backup created: ${backupPath}`);
+            }
             
-            // Write updated JSON if there were changes
-            if (changes > 0) {
-                const pretty = JSON.stringify(jsonData, null, 4);
-                fs.writeFileSync(filePath, pretty, 'utf-8');
-                updatedFiles.push(filePath);
-                console.log(`Backup written: ${backupPath}`);
-            } else {
-                // Remove backup if no changes were made
-                fs.unlinkSync(backupPath);
+            const cursor = traversePath(foundData, item.key);
+            const currentValue = cursor.value;
+            const currentStr = typeof currentValue === 'string' ? currentValue : String(currentValue);
+            
+            // Value matching logic (if not forced)
+            if (!force && currentStr !== item.old) {
+                errors.push(`Mismatch for ${foundInNamespace}.${item.key}: current="${currentStr}", expected="${item.old}"`);
+                return;
+            }
+            
+            // Update the value
+            cursor.value = item.new;
+            console.error(`[DEBUG] Updated ${foundInNamespace}.${item.key}: "${item.old}" -> "${item.new}"`);
+            
+            // Write updated JSON
+            const pretty = JSON.stringify(foundData, null, 4);
+            fs.writeFileSync(foundFilePath, pretty, 'utf-8');
+            
+            // Track updated file
+            if (!updatedFiles.includes(foundFilePath)) {
+                updatedFiles.push(foundFilePath);
             }
             
         } catch (error) {
-            errors.push(`Error processing ${filePath}: ${error.message}`);
+            errors.push(`Error updating ${foundInNamespace}.${item.key}: ${error.message}`);
         }
     });
     
@@ -111,6 +128,26 @@ function updateI18n(config) {
             `Completed with ${errors.length} error(s)` : 
             `Successfully updated ${updatedFiles.length} file(s)`
     };
+}
+
+/**
+ * Check if a key exists in JSON data (supports dot notation)
+ * @param {Object} jsonData - JSON object to search
+ * @param {string} keyPath - Dot-separated path (e.g., "a.b.c")
+ * @returns {boolean} True if key exists
+ */
+function keyExists(jsonData, keyPath) {
+    const segments = keyPath.split('.');
+    let cursor = jsonData;
+    
+    for (let i = 0; i < segments.length; i++) {
+        if (!cursor || typeof cursor !== 'object' || !cursor.hasOwnProperty(segments[i])) {
+            return false;
+        }
+        cursor = cursor[segments[i]];
+    }
+    
+    return true;
 }
 
 /**
