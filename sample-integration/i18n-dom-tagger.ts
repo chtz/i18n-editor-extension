@@ -64,66 +64,106 @@ export function replaceMarkedAttributes(root: ParentNode = document.body) {
 }
 
 /**
- * Replace markers in text nodes in-place. We never add/remove nodes.
- * If a marker spans multiple adjacent text nodes, we:
- *  - merge their strings virtually,
- *  - perform replacements on the merged string,
- *  - write the full result back to the FIRST text node,
- *  - set the remaining sibling text nodes in the cluster to "".
+ * Replace markers in text nodes in-place. Handles markers that span across elements.
+ * Strategy: Remove opening tags [[i18n|ns|key]] and closing tags [[/i18n]] from text nodes,
+ * leaving the content in between intact.
  */
 export function replaceMarkedTextNodes(root: ParentNode = document.body) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node: Text | null;
 
+    // First pass: collect all text nodes with markers
+    const nodesWithMarkers: Text[] = [];
     while ((node = walker.nextNode() as Text | null)) {
-        if (!node || !node.parentElement) continue;
+        if (!node) continue;
+        const text = node.nodeValue ?? "";
+        if (text.indexOf("[[i18n|") !== -1 || text.indexOf("[[/i18n]]") !== -1) {
+            nodesWithMarkers.push(node);
+        }
+    }
 
-        // Build a cluster of contiguous text siblings (do not remove them)
-        const cluster: Text[] = [node];
-        let merged = node.nodeValue ?? "";
-
-        // Only proceed if this node or a neighbor might contain our marker
-        let needsCheck = merged.indexOf("[[i18n|") !== -1;
-
-        // Lookahead: include following text siblings
-        let nxt = node.nextSibling;
+    // Process nodes with complete markers (opening and closing in same node or adjacent siblings)
+    for (const startNode of nodesWithMarkers) {
+        if (!startNode.parentElement) continue;
+        
+        const text = startNode.nodeValue ?? "";
+        if (text.indexOf("[[i18n|") === -1) continue; // Only process nodes with opening markers
+        
+        // Check if this is a simple case: marker contained in adjacent text siblings
+        const cluster: Text[] = [startNode];
+        let merged = text;
+        
+        // Look ahead through adjacent text siblings
+        let nxt = startNode.nextSibling;
         while (nxt && nxt.nodeType === Node.TEXT_NODE) {
             cluster.push(nxt as Text);
-            const val = (nxt as Text).nodeValue ?? "";
-            merged += val;
-            if (val.indexOf("[[i18n|") !== -1) needsCheck = true;
+            merged += (nxt as Text).nodeValue ?? "";
             nxt = nxt.nextSibling;
         }
-        if (!needsCheck) continue;
-
-        // Replace markers in the merged string
+        
+        // Try to process as adjacent siblings first
         MARK_RE.lastIndex = 0;
-        let out = "";
-        let i = 0;
-        let m: RegExpExecArray | null;
-        let changed = false;
-        const metas: Array<{ ns: string; key: string }> = [];
+        const hasCompleteMarker = MARK_RE.test(merged);
+        
+        if (hasCompleteMarker) {
+            // Standard case: markers in adjacent text siblings
+            MARK_RE.lastIndex = 0;
+            let out = "";
+            let i = 0;
+            let m: RegExpExecArray | null;
+            let changed = false;
+            const metas: Array<{ ns: string; key: string }> = [];
 
-        while ((m = MARK_RE.exec(merged))) {
-            const [full, ns, key, value] = m;
-            if (m.index > i) out += merged.slice(i, m.index);
-            out += value ?? "";
-            metas.push({ ns, key });
-            i = m.index + full.length;
-            changed = true;
+            while ((m = MARK_RE.exec(merged))) {
+                const [full, ns, key, value] = m;
+                if (m.index > i) out += merged.slice(i, m.index);
+                out += value ?? "";
+                metas.push({ ns, key });
+                i = m.index + full.length;
+                changed = true;
+            }
+            
+            if (changed) {
+                if (i < merged.length) out += merged.slice(i);
+                
+                // Write back to first node, clear rest
+                cluster[0].nodeValue = out;
+                for (let k = 1; k < cluster.length; k++) {
+                    cluster[k].nodeValue = "";
+                }
+                
+                // Attach metadata
+                for (const { ns, key } of metas) {
+                    attachMeta(startNode.parentElement, ns, key, "text");
+                }
+            }
         }
-        if (!changed) continue;
-        if (i < merged.length) out += merged.slice(i);
-
-        // Write back without changing the node list
-        cluster[0].nodeValue = out;
-        for (let k = 1; k < cluster.length; k++) {
-            cluster[k].nodeValue = ""; // keep nodes, just clear text
+    }
+    
+    // Second pass: handle any remaining marker fragments (opening/closing tags split across elements)
+    // Just remove the marker syntax itself, leaving content intact
+    const walker2 = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while ((node = walker2.nextNode() as Text | null)) {
+        if (!node || !node.parentElement) continue;
+        let text = node.nodeValue ?? "";
+        if (text.indexOf("[[i18n|") === -1 && text.indexOf("[[/i18n]]") === -1) continue;
+        
+        // Remove any remaining opening markers: [[i18n|ns|key]]
+        const beforeOpen = text;
+        text = text.replace(/\[\[i18n\|[^|\]]+\|[^\]]+\]\]/g, '');
+        
+        // Remove any remaining closing markers: [[/i18n]]
+        text = text.replace(/\[\[\/i18n\]\]/g, '');
+        
+        if (text !== beforeOpen) {
+            node.nodeValue = text;
+            // Try to extract metadata from removed markers
+            const openMatches = beforeOpen.matchAll(/\[\[i18n\|([^|\]]+)\|([^\]]+)\]\]/g);
+            for (const match of openMatches) {
+                const [, ns, key] = match;
+                attachMeta(node.parentElement, ns, key, "text");
+            }
         }
-
-        // Attach metadata to the parent element (aggregated, comma-separated)
-        const el = node.parentElement;
-        for (const { ns, key } of metas) attachMeta(el, ns, key, "text");
     }
 
     // Process attributes too
